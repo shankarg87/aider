@@ -136,6 +136,7 @@ class GitRepo:
         try:
             original_user_name = self.repo.config_reader().get_value("user", "name")
         except configparser.NoSectionError:
+            import configparser
             original_user_name = None
         original_committer_name_env = os.environ.get("GIT_COMMITTER_NAME")
         if original_user_name:
