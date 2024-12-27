@@ -9,8 +9,8 @@ from aider.coders import Coder
 from aider.io import InputOutput
 from aider.models import Model
 
-import harness
-from dump import dump
+import swebenchmark.harness
+from swebenchmark.dump import dump
 
 
 def main():

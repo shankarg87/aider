@@ -11,9 +11,9 @@ from pathlib import Path
 
 from swebench.metrics.report import get_model_report
 
-from dump import dump  # noqa: F401
-from tests import remove_patches_to_tests, run_tests
-from utils import (
+from swebenchmark.dump import dump  # noqa: F401
+from swebenchmark.tests import remove_patches_to_tests, run_tests
+from swebenchmark.utils import (
     FULL_DATASET_FNAME,
     choose_predictions,
     get_dataset,

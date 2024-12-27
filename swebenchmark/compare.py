@@ -3,9 +3,9 @@
 import sys
 from collections import Counter, defaultdict
 
-from dump import dump
-from report import load_predictions
-from utils import choose_predictions, is_plausible
+from swebenchmark.dump import dump
+from swebenchmark.report import load_predictions
+from swebenchmark.utils import choose_predictions, is_plausible
 
 dnames = sys.argv[1:]
 

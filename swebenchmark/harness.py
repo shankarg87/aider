@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-
+import os
 import json
 import random
 import subprocess
@@ -12,11 +12,10 @@ from aider.coders import Coder
 from aider.io import InputOutput
 from aider.models import Model, register_litellm_models
 
-from dump import dump
-from tests import run_tests
-from utils import get_full_dataset  # noqa: F401
-from utils import get_lite_dataset  # noqa: F401
-from utils import get_devin_instance_ids, get_plausible, load_predictions, pick_winner
+from swebenchmark.dump import dump
+from swebenchmark.utils import get_full_dataset  # noqa: F401
+from swebenchmark.utils import get_lite_dataset  # noqa: F401
+from swebenchmark.utils import get_devin_instance_ids, get_plausible, load_predictions, pick_winner
 
 REPOS_DNAME = Path("repos")
 CHAT_LOGS_DNAME = Path("chat-logs")
@@ -108,7 +107,10 @@ def run_pre_existing_tests(entry, git_dname):
     Returns None if all the tests passed. Returns the text of the
     test run output if any failed.
     """
-
+    pass
+    
+    """TODO: Code below is badly out of date, Need to fix """
+    """
     model_patch = diff_versus_commit(git_dname, entry["base_commit"])
     passed, output = run_tests(
         entry,
@@ -127,6 +129,7 @@ def run_pre_existing_tests(entry, git_dname):
     output = output.split(">>>>> Applied Patch (test)")[-1]
 
     return output
+    """
 
 
 def get_coder(model, git_dname, chat_history_file, test_cmd, temperature, oracle_files=None):
@@ -154,7 +157,6 @@ def get_coder(model, git_dname, chat_history_file, test_cmd, temperature, oracle
     coder = Coder.create(
         main_model=model,
         io=io,
-        git_dname=git_dname,
         map_tokens=2048,  # Use 2k tokens for the repo map
         stream=False,
         auto_commits=False,  # Don't bother git committing changes
@@ -163,7 +165,6 @@ def get_coder(model, git_dname, chat_history_file, test_cmd, temperature, oracle
         test_cmd=test_cmd,
         # verbose=True,
         # edit_format="udiff",
-        max_chat_history_tokens=8*1024,
     )
     coder.temperature = temperature
 
@@ -180,7 +181,7 @@ def get_coder(model, git_dname, chat_history_file, test_cmd, temperature, oracle
     return coder
 
 
-def process_one_instance(entry, num_tries, models, temperature, model_name_or_path, out_dname):
+def process_one_instance(entry, num_tries, models, temperature, model_name_or_path, out_dname, oracle=False):
     """Process one `entry` from SWE Bench using the LLM `models` at the
     given `temperature`.  Set `model_name_or_path` in the result json.
     Store the result json and the chat log into `out_dname`.
@@ -205,7 +206,7 @@ def process_one_instance(entry, num_tries, models, temperature, model_name_or_pa
         oracle_files = None
     ###
 
-    chat_history_file = out_dname / (instance_id + ".md")
+    chat_history_file = Path(out_dname) / (instance_id + ".md")
 
     # Clean up chat history from previous aborted run
     if chat_history_file.exists():
@@ -219,14 +220,15 @@ def process_one_instance(entry, num_tries, models, temperature, model_name_or_pa
     for attempt in range(1, num_tries + 1):
         for model in models:
             dump(attempt, model)
+            
+            with tempfile.TemporaryDirectory() as git_tempdir:
 
-            with tempfile.TemporaryDirectory(dir="/mnt/aider") as git_tempdir:
                 dump(git_tempdir)
-                checkout_repo(git_tempdir, entry)
-
+                checkout_repo(git_tempdir, entry) # TODO: cache this to run faster.
+                os.chdir(git_tempdir)
                 # Prepare the test command which will run the pre-existing tests
-                test_cmd = lambda: run_pre_existing_tests(entry, git_tempdir)  # noqa: E731
-
+                #test_cmd = lambda: run_pre_existing_tests(entry, git_tempdir)  # noqa: E731
+                test_cmd = None
                 # Get an instance of aider
                 coder = get_coder(
                     model,
@@ -348,71 +350,29 @@ Tell me: which 3-5 files from this repo should I look at to solve the problem?
     out_fname = out_dname / (instance_id + ".json")
     out_fname.write_text(json.dumps(winner, indent=4))
 
+def export_to_gcs(output_folder, gcs_bucket):
+    """ Exports data from the output folder to a GCS bucket
+        May append to a single csv file with the summary results across all runs
+    """    
+    pass
 
 def process_instances(
-    prefix, dataset, models, num_tries, temperature, threads, prior_dnames, just_devin_570
+    dataset, model, instance_id, num_tries, threads, temperature, output_folder, run_id, use_oracle, gcs_bucket
 ):
-    """
-    prefix - Prefix used in front of the dirname in predictions/.
-    dataset - The subset of the SWE Bench dataset to process.
-    models - List of models to use to try and find plausible solutions.
-    num_tries - Number of attempts to make using each model.
-    temperature - Temp to use during chat completions.
-    threads - How many problems to attempt concurrently.
-    prior_dnames - Names of predictions/ dirnames from previous runs.
-                   If they contain a plausible solution for an instance,
-                   don't continue looking.
-    """
-    models_slug = "--".join(model.replace("/", "-") for model in models)
-    model_name_or_path = "aider--" + models_slug
-    models_slug = prefix + "--" + models_slug
-
-    dump(models)
-    dump(temperature)
-
-    out_dname = PREDS_DNAME / models_slug
-    if not out_dname.exists():
-        out_dname.mkdir()
-
-    dump(out_dname)
-
-    # If we are restarting this run, figure out which instances are already done.
-    done_preds = load_predictions([out_dname], just_devin_570)
-    done_instances = set(done_preds.keys())
-    dump(len(done_instances))
-
-    dump(prior_dnames)
-    prior_preds = load_predictions(prior_dnames, just_devin_570)
-    dump(len(prior_preds))
-
-    plausible_instances = get_plausible(prior_preds)
-    dump(len(plausible_instances))
-
-    if prior_preds:
-        # Just keep trying to solve instances that exist in the previous runs
-        all_instances = set(prior_preds.keys())
-    else:
-        all_instances = set(dataset.keys())
-
-    remaining_instances = set(all_instances)
-    remaining_instances -= done_instances
-    remaining_instances -= plausible_instances
-
-    remaining_instances = list(remaining_instances)
-    random.shuffle(remaining_instances)
-
-    dump(sorted(remaining_instances))
-    dump(len(remaining_instances))
-
-    print()
-    print("press enter...")
-    input()
 
     if not CHAT_LOGS_DNAME.exists():
         CHAT_LOGS_DNAME.mkdir()
 
-    chat_history_dname = CHAT_LOGS_DNAME / models_slug
+    # No idea what the hell this code does
+    chat_history_dname = CHAT_LOGS_DNAME / run_id
     chat_history_dname.mkdir(exist_ok=True)
+
+    done_instances = []    
+    if instance_id:
+        remaining_instances = [instance_id]
+    else:
+        # TODO: fix this please
+        remaining_instances = list(dataset.keys())
 
     if threads > 1:
         process_one_instance_lox = lox.process(threads)(process_one_instance)
@@ -427,12 +387,13 @@ def process_instances(
             continue
 
         process_one_instance_func(
-            dataset[instance_id],
-            num_tries,
-            models,
-            temperature,
-            model_name_or_path,
-            out_dname,
+            entry=dataset[instance_id],
+            num_tries=num_tries,
+            models=[model],
+            temperature=temperature,
+            model_name_or_path=run_id, # TODO: this may need to be fixed
+            out_dname=output_folder,
+            oracle=use_oracle,
         )
 
         print("#" * 60)
@@ -441,6 +402,8 @@ def process_instances(
     if threads > 1:
         gather()
 
+    if gcs_bucket:
+        export_to_gcs(output_folder, gcs_bucket)
 
 def main():
     models_json = Path(".aider.models.json")

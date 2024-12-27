@@ -5,13 +5,16 @@ from pathlib import Path
 
 from datasets import load_dataset
 
-from dump import dump  # noqa: F401
+from swebenchmark.dump import dump  # noqa: F401
 
 FULL_DATASET = "princeton-nlp/SWE-bench"
 FULL_DATASET_FNAME = FULL_DATASET.replace("/", "--") + ".json"
 
 LITE_DATASET = "princeton-nlp/SWE-bench_Lite"
 LITE_DATASET_FNAME = LITE_DATASET.replace("/", "--") + ".json"
+
+VERIFIED_DATASET = "princeton-nlp/SWE-bench_Verified"
+VERIFIED_DATASET_FNAME = VERIFIED_DATASET.replace("/", "--") + ".json"
 
 
 def dump_dataset(dataset, fname):

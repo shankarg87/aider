@@ -4,8 +4,8 @@ import random
 import sys
 from collections import Counter, defaultdict
 
-from dump import dump
-from utils import choose_predictions
+from swebenchmark.dump import dump
+from swebenchmark.utils import choose_predictions
 
 devin_only = False
 
