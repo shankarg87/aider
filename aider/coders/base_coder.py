@@ -873,8 +873,10 @@ class Coder:
 
             if self.num_reflections >= self.max_reflections:
                 self.io.tool_warning(f"Only {self.max_reflections} reflections allowed, stopping.")
+                self.event("reached max reflections")
                 return
 
+            self.event("Acting on reflection")
             self.num_reflections += 1
             message = self.reflected_message
 
@@ -1369,6 +1371,7 @@ class Coder:
                 saved_message = self.gpt_prompts.files_content_gpt_edits_no_repo
 
             self.move_back_cur_messages(saved_message)
+            self.event("Comitted files that needed to be edited")
 
         if self.reflected_message:
             return
@@ -1382,16 +1385,20 @@ class Coder:
                 if ok:
                     self.reflected_message = lint_errors
                     self.update_cur_messages()
+                    self.event("Applyed linter updates")
                     return
+                    
 
         shared_output = self.run_shell_commands()
         if shared_output:
+            self.event("Ran shell commands")
             self.cur_messages += [
                 dict(role="user", content=shared_output),
                 dict(role="assistant", content="Ok"),
             ]
 
         if edited and self.auto_test:
+            self.event("Running tests against files")
             test_errors = self.commands.cmd_test(self.test_cmd)
             self.test_outcome = not test_errors
             if test_errors:
@@ -1400,6 +1407,8 @@ class Coder:
                     self.reflected_message = test_errors
                     self.update_cur_messages()
                     return
+                
+        self.event("Message send complete")
 
     def reply_completed(self):
         pass
@@ -1565,6 +1574,7 @@ class Coder:
 
         completion = None
         try:
+            self.event("sending request")
             hash_object, completion = send_completion(
                 model.name,
                 messages,
@@ -1573,6 +1583,7 @@ class Coder:
                 temp,
                 extra_params=model.extra_params,
             )
+            self.event("response received")
             self.chat_completion_call_hashes.append(hash_object.hexdigest())
 
             if self.stream:
@@ -1991,13 +2002,17 @@ class Coder:
     def apply_updates(self):
         edited = set()
         try:
+            self.event("Parsing all edits")
             edits = self.get_edits()
+            self.event("Applying edits on dry-run")
             edits = self.apply_edits_dry_run(edits)
+            self.event("Preparing to edit")
             edits = self.prepare_to_edit(edits)
             edited = set(edit[0] for edit in edits)
-
+            self.event("Applying edits")
             self.apply_edits(edits)
         except ValueError as err:
+            self.event("Error in edit 1")
             self.num_malformed_responses += 1
 
             err = err.args[0]
@@ -2011,9 +2026,11 @@ class Coder:
             return edited
 
         except ANY_GIT_ERROR as err:
+            self.event("Error in edit 2")
             self.io.tool_error(str(err))
             return edited
         except Exception as err:
+            self.event("Error in edit 3")
             self.io.tool_error("Exception while updating files:")
             self.io.tool_error(str(err), strip=False)
 

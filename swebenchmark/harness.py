@@ -11,6 +11,7 @@ import lox
 from aider.coders import Coder
 from aider.io import InputOutput
 from aider.models import Model, register_litellm_models
+from aider.analytics import Analytics
 
 from swebenchmark.dump import dump
 from swebenchmark.utils import get_full_dataset  # noqa: F401
@@ -132,7 +133,7 @@ def run_pre_existing_tests(entry, git_dname):
     """
 
 
-def get_coder(model, git_dname, chat_history_file, test_cmd, temperature, oracle_files=None):
+def get_coder(model, git_dname, chat_history_file, llm_history_file, event_history_file, test_cmd, temperature, oracle_files=None, suggest_shell_commands=False, verbose=False):
     """
     Get an instance of aider to work with the given LLM `model` at `temperature`
     on the code in `git_dname`. Will store the markdown chat logs in
@@ -150,21 +151,21 @@ def get_coder(model, git_dname, chat_history_file, test_cmd, temperature, oracle
         yes=True,  # Say yes to every suggestion aider makes
         chat_history_file=chat_history_file,  # Log the chat here
         input_history_file="/dev/null",  # Don't log the "user input"
+        llm_history_file=llm_history_file, # Log the LLM completions here
     )
-
     dump(git_dname)
 
     coder = Coder.create(
+        analytics=Analytics(logfile=event_history_file),
         main_model=model,
         io=io,
         map_tokens=2048,  # Use 2k tokens for the repo map
         stream=False,
         auto_commits=False,  # Don't bother git committing changes
         fnames=oracle_files,
-        auto_test=True,  # Automatically run the test_cmd after making changes
+        auto_test=False,  # TODO, need to fix this
         test_cmd=test_cmd,
-        # verbose=True,
-        # edit_format="udiff",
+        suggest_shell_commands=suggest_shell_commands,
     )
     coder.temperature = temperature
 
@@ -181,7 +182,7 @@ def get_coder(model, git_dname, chat_history_file, test_cmd, temperature, oracle
     return coder
 
 
-def process_one_instance(entry, num_tries, models, temperature, model_name_or_path, out_dname, oracle=False):
+def process_one_instance(entry, num_tries, models, temperature, model_name_or_path, out_dname, out_pred_file, oracle=False, verbose=False):
     """Process one `entry` from SWE Bench using the LLM `models` at the
     given `temperature`.  Set `model_name_or_path` in the result json.
     Store the result json and the chat log into `out_dname`.
@@ -206,7 +207,9 @@ def process_one_instance(entry, num_tries, models, temperature, model_name_or_pa
         oracle_files = None
     ###
 
-    chat_history_file = Path(out_dname) / (instance_id + ".md")
+    chat_history_file = Path(out_dname) / (instance_id + "-chat-history.md")
+    llm_history_file = Path(out_dname) / (instance_id + "-llm-history.md")
+    event_history_file = Path(out_dname) / (instance_id + "-event-history.json")
 
     # Clean up chat history from previous aborted run
     if chat_history_file.exists():
@@ -222,9 +225,10 @@ def process_one_instance(entry, num_tries, models, temperature, model_name_or_pa
             dump(attempt, model)
             
             with tempfile.TemporaryDirectory() as git_tempdir:
-
                 dump(git_tempdir)
                 checkout_repo(git_tempdir, entry) # TODO: cache this to run faster.
+                # Cache the current working directory
+                original_cwd = os.getcwd()
                 os.chdir(git_tempdir)
                 # Prepare the test command which will run the pre-existing tests
                 #test_cmd = lambda: run_pre_existing_tests(entry, git_tempdir)  # noqa: E731
@@ -234,9 +238,13 @@ def process_one_instance(entry, num_tries, models, temperature, model_name_or_pa
                     model,
                     git_tempdir,
                     chat_history_file,
+                    llm_history_file,
+                    event_history_file,
                     test_cmd,
                     temperature,
-                    oracle_files,
+                    oracle_files=oracle_files,
+                    suggest_shell_commands=False,
+                    verbose=verbose,
                 )
 
                 dump(instance_id)
@@ -261,12 +269,15 @@ Propose changes to update the repo to fix the problem below.
                 except Exception as coder_err:
                     # swallow any exceptions during benchmarking
                     dump(coder_err)
+                    os.chdir(original_cwd)
                     continue
-
+                
+                print("Coder run is complete....")
                 # Take note of which files aider added to the chat for stats later
                 added_files = coder.get_inchat_relative_files()
 
                 if not added_files:
+                    print("No added files ....")
                     message = """You haven't named any files in this repo.
 Remember, this repo is checked out at quite an old commit.
 So the file layout and contents may be unfamiliar.
@@ -274,6 +285,7 @@ So the file layout and contents may be unfamiliar.
 Tell me: which 3-5 files from this repo should I look at to solve the problem?
 """
                     coder.run(message)
+                    print("Coder second run complete ....")
 
                 dump(instance_id)
                 dump(gold_files)
@@ -285,11 +297,11 @@ Tell me: which 3-5 files from this repo should I look at to solve the problem?
                 # Get the diff between the current state and the original commit
                 model_patch = diff_versus_commit(git_tempdir, base_commit)
                 dump(model_patch)
+                os.chdir(original_cwd)
 
             # Record the results for the logs
             result = dict(
                 # Required args for running eval tests
-                instance_id=instance_id,
                 model_name_or_path=model_name_or_path,
                 model_patch=model_patch,
                 # For computing stats
@@ -299,17 +311,17 @@ Tell me: which 3-5 files from this repo should I look at to solve the problem?
                 added_files=added_files,
                 gold_files=gold_files,
                 edited_files=files_in_patch(model_patch),
-                edit_outcome=coder.edit_outcome,
                 lint_outcome=coder.lint_outcome,
                 test_outcome=coder.test_outcome,
             )
             result["try"] = attempt  # `try` is a python keyword
+            result.update(entry)
             results.append(result)
 
             dump(result)
 
             # Did we get a successful edit, lint and test? If so, we found a plausible solution!
-            if model_patch and coder.edit_outcome and coder.lint_outcome and coder.test_outcome:
+            if model_patch and coder.lint_outcome: # TODO, need to reincorporate test outcome // and coder.test_outcome:
                 winner = result
                 break
 
@@ -347,8 +359,22 @@ Tell me: which 3-5 files from this repo should I look at to solve the problem?
         )
     )
 
-    out_fname = out_dname / (instance_id + ".json")
-    out_fname.write_text(json.dumps(winner, indent=4))
+    # reformat in the way that swebench expects evaluation results
+    if not out_pred_file:
+        out_pred_file = Path(out_dname) / (instance_id + ".json")
+
+    # Append the result to the json file specified in out_pred_file
+
+    if Path(out_pred_file).exists():
+        with open(out_pred_file, "r", encoding="utf-8") as f:
+            all_results = json.load(f)
+    else:
+        all_results = []
+
+    all_results.append(winner)
+
+    with open(out_pred_file, "w", encoding="utf-8") as f:
+        json.dump(all_results, f, indent=4)
 
 def export_to_gcs(output_folder, gcs_bucket):
     """ Exports data from the output folder to a GCS bucket
@@ -357,7 +383,7 @@ def export_to_gcs(output_folder, gcs_bucket):
     pass
 
 def process_instances(
-    dataset, model, instance_id, num_tries, threads, temperature, output_folder, run_id, use_oracle, gcs_bucket
+    dataset, model, instance_id, num_tries, threads, temperature, output_folder, run_id, use_oracle, gcs_bucket, verbose=False
 ):
 
     if not CHAT_LOGS_DNAME.exists():
@@ -391,9 +417,11 @@ def process_instances(
             num_tries=num_tries,
             models=[model],
             temperature=temperature,
-            model_name_or_path=run_id, # TODO: this may need to be fixed
+            model_name_or_path=model, # TODO: this may need to be fixed
             out_dname=output_folder,
             oracle=use_oracle,
+            verbose=verbose,
+            out_pred_file=f"{output_folder}/{run_id}"
         )
 
         print("#" * 60)

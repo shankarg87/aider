@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--num_tries", type=int, default=1, help="number of tries to run the model (optional argument)")
     parser.add_argument("--num_threads", type=int, default=1, help="number of threads")
     parser.add_argument("--use_oracle", action="store_true", help="use oracle")
+    parser.add_argument("--verbose", action="store_true", help="verbose logging")    
     parser.add_argument("--gcs_bucket", type=str, help="gcs bucket (optional argument) to store results of the run")
 
 
@@ -57,7 +58,8 @@ def main():
         output_folder=args.output_folder,
         use_oracle=args.use_oracle,
         gcs_bucket=args.gcs_bucket,
-        temperature=0.0, # TODO: add temperature to the arguments
+        temperature=0.0, # TODO: add temperature to the arguments,
+        verbose=args.verbose
     )
 
 
