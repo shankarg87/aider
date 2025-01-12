@@ -171,7 +171,7 @@ def get_coder(model, git_dname, chat_history_file, llm_history_file, event_histo
 
     # Take at most 4 steps before giving up.
     # Usually set to 5, but this reduces API costs.
-    coder.max_reflections = 4
+    coder.max_reflections = 10
 
     # Add announcement lines to the markdown chat log
     coder.show_announcements()
