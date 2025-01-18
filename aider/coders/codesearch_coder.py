@@ -1,5 +1,7 @@
 from .editblock_coder import EditBlockCoder
 import jedi
+from tree_sitter import Language, Parser
+import tree_sitter_python as tspython
 
 
 class CodeSearchCoder(EditBlockCoder):
@@ -12,20 +14,20 @@ class CodeSearchCoder(EditBlockCoder):
             parameters=dict(
                 type="object",
                 properties=dict(
-                    filepath=dict(
+                    file_path=dict(
                         type="string",
                         description="File where you observe the symbol",
                     ),
-                    linenumber=dict(
+                    line_number=dict(
                         type="integer",
                         description="Line number where you observe the symbol",
                     ),
-                    columnnumber=dict( 
+                    column_number=dict( 
                         type="integer",
                         description="Column number where you observe the symbol",
                     ),
                 ),
-                required=["filepath, linenumber, columnnumber"],
+                required=["file_path, line_number, column_number"],
                 additionalProperties=False,
             ),
         ),
@@ -35,24 +37,38 @@ class CodeSearchCoder(EditBlockCoder):
             parameters=dict(
                 type="object",
                 properties=dict(
-                    filepath=dict(
+                    file_path=dict(
                         type="string",
                         description="File where you observe the symbol",
                     ),
-                    linenumber=dict(
+                    line_number=dict(
                         type="integer",
                         description="Line number where you observe the symbol",
                     ),
-                    columnnumber=dict( 
+                    column_number=dict( 
                         type="integer",
                         description="Column number where you observe the symbol",
                     ),
                 ),
-                required=["filepath, linenumber, columnnumber"],
+                required=["file_path, line_number, column_number"],
                 additionalProperties=False,
             ),
-
         ),
+        dict(
+            name="read_file",
+            description="get contents of a file",
+            parameters=dict(
+                type="object",
+                properties=dict(
+                    file_path=dict(
+                        type="string",
+                        description="File where you observe the symbol",
+                    ),
+                ),
+                required=["file_path"],
+                additionalProperties=False,
+            ),
+        ),        
         # Pending functions: read_file, list_all_files, text_to_symbols (to map text to simple using RAG + Vector search)
     ]
 
@@ -60,27 +76,47 @@ class CodeSearchCoder(EditBlockCoder):
         # Tl;DR: Initialize the Jedi project for the repository.
         self.jedi_project = jedi.Project(self.repo_map.root, sys_path=None)
 
-    def get_references(self, file_path, line, column):
+    def get_references(self, file_path, line_number, column_number):
         # Tl;DR use jedi to dump to the references of the symbol.
         with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
 
         script = jedi.Script(code, path=file_path, project=self.jedi_project)
-        references = script.get_references(line, column)
+        references = script.get_references(line_number, column_number)
         return [dump_reference(r) for r in references]       
         
 
-    def get_definition(self, file_path, line, column):
+    def get_definition(self, file_path, line_number, column_number):
         # Tl;DR use jedi to dump to the definition of the symbol. Then use tree-sitter to identify beginning and end of the definition.
         with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
 
         script = jedi.Script(code, path=file_path, project=self.jedi_project)
-        definitions = script.goto(line, column)
+        definitions = script.goto(line_number, column_number)
 
         # Resolve the original definition recursively
         original_definition = resolve_original_definition(definitions, self.jedi_project)
-        return original_definition
+        return dump_definition(original_definition)
+    
+    def read_file(self, file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            return str({
+                "file": f.read(),
+                "file_path": file_path,
+            })
+    
+    def process_codesearch(self, args) -> str:
+        # Tl;DR: Process the codesearch request
+        name = self.partial_response_function_call.get("name")
+
+        if name == "get_definition":
+            return self.get_definition(**args)
+        elif name == "get_references":
+            return self.get_references(**args)
+        elif name == "read_file":
+            return self.read_file(**args)
+        else:
+            raise ValueError(f'Unknown function_call name="{name}"')
 
 def resolve_original_definition(definitions, project, visited=None):
     """
@@ -136,7 +172,47 @@ def dump_reference(ref, context_lines=3):
             "file_path": ref.module_path,
             "line": ref.line,
             "column": ref.column,
-            "surrounding_code": surrounding_code
+            "relevant_code": surrounding_code
         })
     return ""
+
+def dump_definition(definition) -> str:
+    if definition.module_path and definition.line:
+        with open(definition.module_path, "r", encoding="utf-8") as f:
+            code = f.read()
+        py_language = Language(tspython.language())
+        parser = Parser(py_language)
+        tree = parser.parse(bytes(code, "utf8"))
+
+        node = tree.root_node.descendant_for_point_range(
+            (definition.line - 1, definition.column),
+            (definition.line - 1, definition.column)
+        )
+
+        while node and node.type != 'function_definition' and node.type != 'class_definition':
+            node = node.parent
+
+        if node:
+            start_byte = node.start_byte
+            end_byte = node.end_byte
+            code_snippet = code[start_byte:end_byte]
+        else:
+            code_snippet = ""
+
+        return str({
+            "name": definition.name,
+            "type": definition.type,
+            "module_path": definition.module_path,
+            "line": definition.line,
+            "column": definition.column,
+            "code": code_snippet
+        })
+    return str({
+        "name": definition.name,
+        "type": definition.type,
+        "module_path": None,
+        "line": None,
+        "column": None,
+        "code_snippet": None
+    })
 

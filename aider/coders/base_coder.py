@@ -1335,6 +1335,15 @@ class Coder:
                 content = args.get("explanation") or ""
             else:
                 content = ""
+            if hasattr(self, "process_codesearch"):
+                codesearch_results = self.process_codesearch(args)
+                if codesearch_results:
+                    if self.reflected_message:
+                        self.reflected_message += "\n\n" + codesearch_results
+                    else:
+                        self.reflected_message = codesearch_results
+                    return
+
         elif self.partial_response_content:
             content = self.partial_response_content
         else:
@@ -1611,7 +1620,8 @@ class Coder:
 
             if self.partial_response_content:
                 self.io.ai_output(self.partial_response_content)
-            elif self.partial_response_function_call:
+            
+            if self.partial_response_function_call:
                 # TODO: push this into subclasses
                 args = self.parse_partial_args()
                 if args:
