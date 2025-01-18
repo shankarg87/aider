@@ -32,8 +32,9 @@ def send_completion(
     if temperature is not None:
         kwargs["temperature"] = temperature
 
-    kwargs["tools"] = [dict(type="function", function=f) for f in functions]
-    kwargs["tool_choice"] = "auto"
+    if functions is not None:
+        kwargs["tools"] = [dict(type="function", function=f) for f in functions]
+        kwargs["tool_choice"] = "auto"
 
     if extra_params is not None:
         kwargs.update(extra_params)

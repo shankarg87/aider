@@ -157,6 +157,7 @@ def get_coder(model, git_dname, chat_history_file, llm_history_file, event_histo
 
     coder = Coder.create(
         analytics=Analytics(logfile=event_history_file),
+        edit_format="codesearch",
         main_model=model,
         io=io,
         map_tokens=2048,  # Use 2k tokens for the repo map

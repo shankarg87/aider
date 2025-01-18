@@ -645,13 +645,15 @@ class Coder:
         if not self.repo_map:
             return
 
+        all_abs_files = set(self.get_all_abs_files())
+        """
         cur_msg_text = self.get_cur_message_text()
         mentioned_fnames = self.get_file_mentions(cur_msg_text)
         mentioned_idents = self.get_ident_mentions(cur_msg_text)
 
         mentioned_fnames.update(self.get_ident_filename_matches(mentioned_idents))
 
-        all_abs_files = set(self.get_all_abs_files())
+
         repo_abs_read_only_fnames = set(self.abs_read_only_fnames) & all_abs_files
         chat_files = set(self.abs_fnames) | repo_abs_read_only_fnames
         other_files = all_abs_files - chat_files
@@ -672,7 +674,8 @@ class Coder:
                 mentioned_fnames=mentioned_fnames,
                 mentioned_idents=mentioned_idents,
             )
-
+        """
+        repo_content = ""
         # fall back to completely unhinted repo
         if not repo_content:
             repo_content = self.repo_map.get_repo_map(
@@ -1053,6 +1056,11 @@ class Coder:
         else:
             language = "the same language they are using"
 
+        if hasattr(self.gpt_prompts, "tool_use"):
+            tool_use = self.gpt_prompts.tool_use
+        else:
+            tool_use = ""
+
         prompt = prompt.format(
             fence=self.fence,
             lazy_prompt=lazy_prompt,
@@ -1060,6 +1068,7 @@ class Coder:
             shell_cmd_prompt=shell_cmd_prompt,
             shell_cmd_reminder=shell_cmd_reminder,
             language=language,
+            tool_use=tool_use,
         )
         return prompt
 
@@ -1116,6 +1125,7 @@ class Coder:
         self.summarize_end()
         chunks.done = self.done_messages
 
+        # TODO(shankgan): Optimize this to only send the repo map at the beginning of a chat session
         chunks.repo = self.get_repo_messages()
         chunks.readonly_files = self.get_readonly_files_messages()
         chunks.chat_files = self.get_chat_files_messages()
@@ -1639,6 +1649,7 @@ class Coder:
         show_content_err = None
         try:
             if completion.choices[0].message.tool_calls:
+                self.event("partial function call was triggerred")
                 self.partial_response_function_call = (
                     completion.choices[0].message.tool_calls[0].function
                 )

@@ -2,15 +2,16 @@ from .editblock_coder import EditBlockCoder
 import jedi
 from tree_sitter import Language, Parser
 import tree_sitter_python as tspython
-
+from .codesearch_prompts import CodeSearchPrompts
 
 class CodeSearchCoder(EditBlockCoder):
     "A coder that relies on codesearch"
     edit_format = "codesearch"
+    gpt_prompts = CodeSearchPrompts()
     functions = [
         dict(
             name="get_definition",
-            description="get the definition of a function or class or a general symbol that you see in a particular file",
+            description="Inspect the definition of a function or class or a general symbol that you see in a particular file",
             parameters=dict(
                 type="object",
                 properties=dict(
@@ -33,7 +34,7 @@ class CodeSearchCoder(EditBlockCoder):
         ),
         dict(
             name="get_references",
-            description="get snippets of code that reference the symbol in question",
+            description="Inspect snippets of code that reference a particular symbol",
             parameters=dict(
                 type="object",
                 properties=dict(
@@ -56,7 +57,7 @@ class CodeSearchCoder(EditBlockCoder):
         ),
         dict(
             name="read_file",
-            description="get contents of a file",
+            description="Get all contents of a file",
             parameters=dict(
                 type="object",
                 properties=dict(
@@ -72,16 +73,12 @@ class CodeSearchCoder(EditBlockCoder):
         # Pending functions: read_file, list_all_files, text_to_symbols (to map text to simple using RAG + Vector search)
     ]
 
-    def init_index(self):
-        # Tl;DR: Initialize the Jedi project for the repository.
-        self.jedi_project = jedi.Project(self.repo_map.root, sys_path=None)
-
     def get_references(self, file_path, line_number, column_number):
         # Tl;DR use jedi to dump to the references of the symbol.
         with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
-
-        script = jedi.Script(code, path=file_path, project=self.jedi_project)
+        jedi_project = jedi.Project(self.repo_map.root, sys_path=None)
+        script = jedi.Script(code, path=file_path, project=jedi_project)
         references = script.get_references(line_number, column_number)
         return [dump_reference(r) for r in references]       
         
@@ -90,12 +87,12 @@ class CodeSearchCoder(EditBlockCoder):
         # Tl;DR use jedi to dump to the definition of the symbol. Then use tree-sitter to identify beginning and end of the definition.
         with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
-
-        script = jedi.Script(code, path=file_path, project=self.jedi_project)
+        jedi_project = jedi.Project(self.repo_map.root, sys_path=None)
+        script = jedi.Script(code, path=file_path, project=jedi_project)
         definitions = script.goto(line_number, column_number)
 
         # Resolve the original definition recursively
-        original_definition = resolve_original_definition(definitions, self.jedi_project)
+        original_definition = resolve_original_definition(definitions, jedi_project)
         return dump_definition(original_definition)
     
     def read_file(self, file_path):
