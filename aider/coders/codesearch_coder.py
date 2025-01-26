@@ -1,8 +1,11 @@
 from .editblock_coder import EditBlockCoder
 import jedi
+from typing import Tuple
 from tree_sitter import Language, Parser
 import tree_sitter_python as tspython
 from .codesearch_prompts import CodeSearchPrompts
+import os
+import json
 
 class CodeSearchCoder(EditBlockCoder):
     "A coder that relies on codesearch"
@@ -56,35 +59,103 @@ class CodeSearchCoder(EditBlockCoder):
             ),
         ),
         dict(
-            name="read_file",
-            description="Get all contents of a file",
+            name="read_files",
+            description="Get the contents of multiple files",
             parameters=dict(
                 type="object",
                 properties=dict(
-                    file_path=dict(
-                        type="string",
-                        description="File where you observe the symbol",
+                    file_paths=dict(
+                        type="array",
+                        items=dict(
+                            type="string",
+                            description="File path",
+                        ),
                     ),
                 ),
-                required=["file_path"],
+                required=["file_paths"],
                 additionalProperties=False,
             ),
+        ),
+        dict(
+            name="list",
+            description="List contents of a directory",
+            parameters=dict(
+                type="object",
+                properties=dict(
+                    dir_path=dict(
+                        type="string",
+                        description="Directory path",
+                    ),
+                ),
+                required=["dir_path"],
+                additionalProperties=False,
+            ),
+        ),
+        dict(
+            name="add_files",
+            description="Add final files where edit needs to be performed.",
+            parameters=dict(
+                type="object",
+                properties=dict(
+                    file_paths=dict(
+                        type="array",
+                        items=dict(
+                            type="string",
+                            description="File path",
+                        ),
+                    ),
+                ),
+                required=["file_paths"],
+                additionalProperties=False,
+            ),            
+        ),
+        dict(
+            name="grep",
+            description="Find all files that contain occurence of a particular text",
+            parameters=dict(
+                type="object",
+                properties=dict(
+                    text=dict(
+                        type="string",
+                        description="text that you need to search for",
+                    ),
+                    dir_path=dict(
+                        type="string",
+                        description="directory in which you want to search",
+                    ),
+                ),
+                required=["text, dir_path"],
+                additionalProperties=False,
+            ),       
         ),        
-        # Pending functions: read_file, list_all_files, text_to_symbols (to map text to simple using RAG + Vector search)
     ]
 
     def get_references(self, file_path, line_number, column_number):
         # Tl;DR use jedi to dump to the references of the symbol.
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"The file {file_path} does not exist.")
+        if not os.path.isfile(file_path):
+            raise IsADirectoryError(f"The path {file_path} is not a file.")
+        if not file_path.endswith(('.py', '.txt')):
+            raise ValueError(f"The file {file_path} is not a valid text file.")
+                
         with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
         jedi_project = jedi.Project(self.repo_map.root, sys_path=None)
         script = jedi.Script(code, path=file_path, project=jedi_project)
         references = script.get_references(line_number, column_number)
-        return [dump_reference(r) for r in references]       
+        return [dump_reference(r) for r in references]   
         
 
     def get_definition(self, file_path, line_number, column_number):
         # Tl;DR use jedi to dump to the definition of the symbol. Then use tree-sitter to identify beginning and end of the definition.
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"The file {file_path} does not exist.")
+        if not os.path.isfile(file_path):
+            raise IsADirectoryError(f"The path {file_path} is not a file.")
+        if not file_path.endswith(('.py', '.txt')):
+            raise ValueError(f"The file {file_path} is not a valid text file.")
+        
         with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
         jedi_project = jedi.Project(self.repo_map.root, sys_path=None)
@@ -95,25 +166,97 @@ class CodeSearchCoder(EditBlockCoder):
         original_definition = resolve_original_definition(definitions, jedi_project)
         return dump_definition(original_definition)
     
-    def read_file(self, file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            return str({
-                "file": f.read(),
-                "file_path": file_path,
-            })
+    def read_files(self, file_paths):
+        content = []
+        for file_path in file_paths:
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"The file {file_path} does not exist.")
+            if not os.path.isfile(file_path):
+                raise IsADirectoryError(f"The path {file_path} is not a file.")
+            if not file_path.endswith(('.py', '.txt')):
+                raise ValueError(f"The file {file_path} is not a valid text file.")
+            
+            with open(file_path, "r", encoding="utf-8") as f:
+                content.append({
+                    "file_content": f.read(),
+                    "file_path": file_path,
+                })
+
+        return content
+        
+    def list(self, dir_path):
+        """ List all files in a directory """
+        contents = []
+        full_path = os.path.join(os.getcwd(), dir_path)
+        
+        if os.path.exists(full_path):
+            for item in os.listdir(full_path):
+                item_path = os.path.join(full_path, item)
+                if os.path.isdir(item_path):
+                    contents.append(f"Directory: {item}")
+                else:
+                    contents.append(f"File: {item}")
+        else:
+            raise FileNotFoundError(f"The directory {full_path} does not exist.")
+        
+        return contents
     
-    def process_codesearch(self, args) -> str:
+    def grep(self, text, dir_path):
+        """Recursively search for text in Python files under a directory."""
+        contents = []
+        full_path = os.path.join(os.getcwd(), dir_path)
+
+        if os.path.exists(full_path):
+            for root, dirs, files in os.walk(full_path):
+                for file in files:
+                    if file.endswith(".py"):
+                        file_path = os.path.join(root, file)
+                        try:
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                i = 0
+                                for line in f:
+                                    if text in line:
+                                        contents.append({
+                                            "filepath": file_path,
+                                            "line_number": i,
+                                            "content": line,
+                                        })
+                                    i += 1
+                        except UnicodeDecodeError:
+                            continue
+        else:
+            raise FileNotFoundError(f"The directory {full_path} does not exist.")
+
+        return contents
+
+    def preedit_tool_call(self, args) -> Tuple[bool, dict]:
         # Tl;DR: Process the codesearch request
         name = self.partial_response_function_call.get("name")
+        content = ""
+        cached_tool_output = {}
+        valid_call = True
 
+        # TODO(shankgan): Raise appropriate exceptions here to inform assistant of bad function calls
         if name == "get_definition":
-            return self.get_definition(**args)
+            content = self.get_definition(**args)
         elif name == "get_references":
-            return self.get_references(**args)
-        elif name == "read_file":
-            return self.read_file(**args)
+            content = self.get_references(**args)
+        elif name == "read_files":
+            content = self.read_files(**args)
+        elif name == "list":
+            content = self.list(**args)
+        elif name == "grep":
+            content = self.grep(**args)
+        elif name == "add_files":
+            for file in args["file_paths"]:
+                self.add_rel_fname(file)
+            content = ""
         else:
-            raise ValueError(f'Unknown function_call name="{name}"')
+            valid_call = False
+
+        if valid_call:
+            cached_tool_output = {"tool_call_id": self.partial_response_tool_calls[0]["id"], "content": json.dumps(content)}
+        return valid_call, cached_tool_output
 
 def resolve_original_definition(definitions, project, visited=None):
     """
@@ -165,12 +308,12 @@ def dump_reference(ref, context_lines=3):
         end_line = min(ref.line + context_lines, len(lines))
         surrounding_code = ''.join(lines[start_line:end_line])
 
-        return str({
+        return {
             "file_path": ref.module_path,
             "line": ref.line,
             "column": ref.column,
             "relevant_code": surrounding_code
-        })
+        }
     return ""
 
 def dump_definition(definition) -> str:
@@ -196,20 +339,20 @@ def dump_definition(definition) -> str:
         else:
             code_snippet = ""
 
-        return str({
+        return {
             "name": definition.name,
             "type": definition.type,
             "module_path": definition.module_path,
             "line": definition.line,
             "column": definition.column,
             "code": code_snippet
-        })
-    return str({
+        }
+    return {
         "name": definition.name,
         "type": definition.type,
         "module_path": None,
         "line": None,
         "column": None,
         "code_snippet": None
-    })
+    }
 

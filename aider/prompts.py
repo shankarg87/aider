@@ -33,6 +33,10 @@ added_files = (
     "I added these files to the chat: {fnames}\nLet me know if there are others we should add."
 )
 
+tool_use = (
+    "See below for the results of tool use. Use them to perform deeper code analysis if needed, or start performing edits."
+)
+
 
 run_output = """I ran this command:
 

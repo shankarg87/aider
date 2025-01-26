@@ -130,7 +130,6 @@ def format_messages(messages, title=None):
         function_call = msg.get("function_call")
         if function_call:
             output.append(f"{role} Function Call: {function_call}")
-
     return "\n".join(output)
 
 

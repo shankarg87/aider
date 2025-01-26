@@ -133,7 +133,7 @@ def run_pre_existing_tests(entry, git_dname):
     """
 
 
-def get_coder(model, git_dname, chat_history_file, llm_history_file, event_history_file, test_cmd, temperature, oracle_files=None, suggest_shell_commands=False, verbose=False):
+def get_search_coder(model, git_dname, chat_history_file, llm_history_file, event_history_file, test_cmd, temperature, oracle_files=None, suggest_shell_commands=False, verbose=False):
     """
     Get an instance of aider to work with the given LLM `model` at `temperature`
     on the code in `git_dname`. Will store the markdown chat logs in
@@ -160,13 +160,14 @@ def get_coder(model, git_dname, chat_history_file, llm_history_file, event_histo
         edit_format="codesearch",
         main_model=model,
         io=io,
-        map_tokens=2048,  # Use 2k tokens for the repo map
+        map_tokens=0,  # disable repo_map
         stream=False,
         auto_commits=False,  # Don't bother git committing changes
-        fnames=oracle_files,
+        fnames=[],
         auto_test=False,  # TODO, need to fix this
         test_cmd=test_cmd,
         suggest_shell_commands=suggest_shell_commands,
+        detect_urls = False,
     )
     coder.temperature = temperature
 
@@ -180,6 +181,27 @@ def get_coder(model, git_dname, chat_history_file, llm_history_file, event_histo
     # messages = coder.format_messages()
     # utils.show_messages(messages)
 
+    return coder
+
+def get_edit_coder(from_coder, event_history_file):
+    """
+    Get an instance of aider to work with the given LLM `model` at `temperature`
+    on the code in `git_dname`. Will store the markdown chat logs in
+    the `chat_history_file`. Tells aider it can use the `test_cmd` to
+    run tests after the LLM edits files.
+
+    If `oracle_files` are provided, they are added to the aider chat automatically.
+    """
+    coder = Coder.create(
+        analytics=Analytics(logfile=event_history_file),
+        from_coder=from_coder,
+        edit_format="diff",
+        map_tokens=4096,
+        detect_urls = True,
+    )
+    
+    # Add announcement lines to the markdown chat log
+    coder.show_announcements()
     return coder
 
 
@@ -235,7 +257,7 @@ def process_one_instance(entry, num_tries, models, temperature, model_name_or_pa
                 #test_cmd = lambda: run_pre_existing_tests(entry, git_tempdir)  # noqa: E731
                 test_cmd = None
                 # Get an instance of aider
-                coder = get_coder(
+                search_coder = get_search_coder(
                     model,
                     git_tempdir,
                     chat_history_file,
@@ -254,7 +276,7 @@ def process_one_instance(entry, num_tries, models, temperature, model_name_or_pa
                 # Tell aider to work on the `problem_statement`.
                 # This is the same as if you pasted it into a fresh chat with aider
                 # launched in the repo.
-                message = """Below is a real GitHub issue from a popular GitHub repository.
+                orig_message = """Below is a real GitHub issue from a popular GitHub repository.
 The issue was filed some time ago.
 The repo has been checked out at the commit that existed at the moment the issue was filed.
 If you are already familiar with this repo, be cautious!
@@ -264,9 +286,9 @@ Filenames, directory names, file contents, etc may be different than what you're
 Propose changes to update the repo to fix the problem below.
 
 #"""
-                message += problem_statement
+                orig_message += problem_statement
                 try:
-                    coder.run(message)
+                    search_coder.run(orig_message)
                 except Exception as coder_err:
                     # swallow any exceptions during benchmarking
                     dump(coder_err)
@@ -275,7 +297,7 @@ Propose changes to update the repo to fix the problem below.
                 
                 print("Coder run is complete....")
                 # Take note of which files aider added to the chat for stats later
-                added_files = coder.get_inchat_relative_files()
+                added_files = search_coder.get_inchat_relative_files()
 
                 if not added_files:
                     print("No added files ....")
@@ -285,15 +307,25 @@ So the file layout and contents may be unfamiliar.
 
 Tell me: which 3-5 files from this repo should I look at to solve the problem?
 """
-                    coder.run(message)
+                    search_coder.run(message)
                     print("Coder second run complete ....")
+
+                print(" Now running edit coder with oracle files {added_files} ....")
+                edit_coder = get_edit_coder(search_coder, event_history_file)
+                try:
+                    edit_coder.run(orig_message)
+                except Exception as coder_err:
+                    # swallow any exceptions during benchmarking
+                    dump(coder_err)
+                    os.chdir(original_cwd)
+                    continue              
 
                 dump(instance_id)
                 dump(gold_files)
                 dump(added_files)
 
                 # Keep track of API costs
-                cost += coder.total_cost
+                cost += search_coder.total_cost
 
                 # Get the diff between the current state and the original commit
                 model_patch = diff_versus_commit(git_tempdir, base_commit)
@@ -308,12 +340,12 @@ Tell me: which 3-5 files from this repo should I look at to solve the problem?
                 # For computing stats
                 model=model,
                 temperature=temperature,
-                cost=coder.total_cost,
+                cost=search_coder.total_cost,
                 added_files=added_files,
                 gold_files=gold_files,
                 edited_files=files_in_patch(model_patch),
-                lint_outcome=coder.lint_outcome,
-                test_outcome=coder.test_outcome,
+                lint_outcome=search_coder.lint_outcome,
+                test_outcome=search_coder.test_outcome,
             )
             result["try"] = attempt  # `try` is a python keyword
             result.update(entry)
@@ -322,7 +354,7 @@ Tell me: which 3-5 files from this repo should I look at to solve the problem?
             dump(result)
 
             # Did we get a successful edit, lint and test? If so, we found a plausible solution!
-            if model_patch and coder.lint_outcome: # TODO, need to reincorporate test outcome // and coder.test_outcome:
+            if model_patch and search_coder.lint_outcome: # TODO, need to reincorporate test outcome // and coder.test_outcome:
                 winner = result
                 break
 

@@ -474,6 +474,9 @@ class Coder:
         self.auto_test = auto_test
         self.test_cmd = test_cmd
 
+        # Output of tool calls
+        self.cached_tool_output = None
+
         # validate the functions jsonschema
         if self.functions:
             from jsonschema import Draft7Validator
@@ -1056,11 +1059,6 @@ class Coder:
         else:
             language = "the same language they are using"
 
-        if hasattr(self.gpt_prompts, "tool_use"):
-            tool_use = self.gpt_prompts.tool_use
-        else:
-            tool_use = ""
-
         prompt = prompt.format(
             fence=self.fence,
             lazy_prompt=lazy_prompt,
@@ -1068,7 +1066,6 @@ class Coder:
             shell_cmd_prompt=shell_cmd_prompt,
             shell_cmd_reminder=shell_cmd_reminder,
             language=language,
-            tool_use=tool_use,
         )
         return prompt
 
@@ -1146,7 +1143,6 @@ class Coder:
         messages_tokens = self.main_model.token_count(chunks.all_messages())
         reminder_tokens = self.main_model.token_count(reminder_message)
         cur_tokens = self.main_model.token_count(chunks.cur)
-
         if None not in (messages_tokens, reminder_tokens, cur_tokens):
             total_tokens = messages_tokens + reminder_tokens + cur_tokens
         else:
@@ -1240,6 +1236,15 @@ class Coder:
 
     def send_message(self, inp):
         self.event("message_send_starting")
+
+        if self.cached_tool_output:
+            self.cur_messages += [
+                dict(role="tool",
+                    tool_call_id=self.cached_tool_output["tool_call_id"],
+                    content = json.dumps(self.cached_tool_output["content"]),
+                ),
+            ]
+            self.cached_tool_output = None
 
         self.cur_messages += [
             dict(role="user", content=inp),
@@ -1345,13 +1350,28 @@ class Coder:
                 content = args.get("explanation") or ""
             else:
                 content = ""
-            if hasattr(self, "process_codesearch"):
-                codesearch_results = self.process_codesearch(args)
-                if codesearch_results:
-                    if self.reflected_message:
-                        self.reflected_message += "\n\n" + codesearch_results
+            if hasattr(self, "preedit_tool_call"):
+                self.event("predit tool call name: {}, args: {}".
+                           format(self.partial_response_function_call.get("name"), args))
+                try:
+                    valid, self.cached_tool_output = self.preedit_tool_call(args)
+                    msg = "The tool use results are attached below."
+                except Exception as e:
+                    valid = True
+                    self.io.tool_warning(str(e))
+                    msg = "The tool use failed with the following error: " + str(e)
+
+                if valid:
+                    self.update_cur_messages()
+                    if self.cached_tool_output["content"]:
+                        self.event("preedit tool call name: {} results: {}".format(self.partial_response_function_call.get("name"), self.cached_tool_output["content"]))
+                        # Only return if this was a valid attempt at using preedit tools
+                        if self.reflected_message:
+                            self.reflected_message += "\n\n" + msg
+                        else:
+                            self.reflected_message = msg
                     else:
-                        self.reflected_message = codesearch_results
+                        self.move_back_cur_messages("")
                     return
 
         elif self.partial_response_content:
@@ -1509,8 +1529,8 @@ class Coder:
             self.cur_messages += [
                 dict(
                     role="assistant",
-                    content=None,
-                    function_call=self.partial_response_function_call,
+                    content="",
+                    tool_calls=self.partial_response_tool_calls,
                 )
             ]
 
@@ -1583,6 +1603,7 @@ class Coder:
 
         self.partial_response_content = ""
         self.partial_response_function_call = dict()
+        self.partial_response_tool_calls = []
 
         self.io.log_llm_history("TO LLM", format_messages(messages))
 
@@ -1641,7 +1662,7 @@ class Coder:
         if self.verbose:
             print(completion)
 
-        if not completion.choices:
+        if not "choices" in completion or not completion.choices:
             self.io.tool_error(str(completion))
             return
 
@@ -1653,6 +1674,7 @@ class Coder:
                 self.partial_response_function_call = (
                     completion.choices[0].message.tool_calls[0].function
                 )
+                self.partial_response_tool_calls = completion.choices[0].message.tool_calls
         except AttributeError as func_err:
             show_func_err = func_err
 

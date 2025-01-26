@@ -39,8 +39,11 @@ def send_completion(
     if extra_params is not None:
         kwargs.update(extra_params)
 
-    key = json.dumps(kwargs, sort_keys=True).encode()
-
+    try:
+        key = json.dumps(kwargs, sort_keys=True).encode()
+    except Exception as e:
+        key = "blah".encode()
+        
     # Generate SHA1 hash of kwargs and append it to chat_completion_call_hashes
     hash_object = hashlib.sha1(key)
 
