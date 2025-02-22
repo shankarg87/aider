@@ -37,7 +37,7 @@ class CodeSearchCoder(EditBlockCoder):
         ),
         dict(
             name="get_references",
-            description="Inspect snippets of code that reference a particular symbol",
+            description="Inspect snippets of code that reference a particular symbol that you see in a particular file",
             parameters=dict(
                 type="object",
                 properties=dict(
@@ -238,15 +238,15 @@ class CodeSearchCoder(EditBlockCoder):
 
         # TODO(shankgan): Raise appropriate exceptions here to inform assistant of bad function calls
         if name == "get_definition":
-            content = self.get_definition(**args)
+            content = json.dumps(self.get_definition(**args))
         elif name == "get_references":
-            content = self.get_references(**args)
+            content = json.dumps(self.get_references(**args))
         elif name == "read_files":
-            content = self.read_files(**args)
+            content = json.dumps(self.read_files(**args))
         elif name == "list":
-            content = self.list(**args)
+            content = json.dumps(self.list(**args))
         elif name == "grep":
-            content = self.grep(**args)
+            content = json.dumps(self.grep(**args))
         elif name == "add_files":
             for file in args["file_paths"]:
                 self.add_rel_fname(file)
@@ -255,7 +255,7 @@ class CodeSearchCoder(EditBlockCoder):
             valid_call = False
 
         if valid_call:
-            cached_tool_output = {"tool_call_id": self.partial_response_tool_calls[0]["id"], "content": json.dumps(content)}
+            cached_tool_output = {"tool_call_id": self.partial_response_tool_calls[0]["id"], "content": content}
         return valid_call, cached_tool_output
 
 def resolve_original_definition(definitions, project, visited=None):

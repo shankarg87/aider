@@ -38,7 +38,7 @@ def get_lite_dataset():
     return get_dataset(LITE_DATASET, LITE_DATASET_FNAME)
 
 
-def get_dataset(dataset, fname):
+def get_dataset(dataset, fname, start_range=0, end_range=0):
     """
     Load the `DATASET` from hugging face, and turn it into a dict
     keyed on `instance_id`.
@@ -55,8 +55,12 @@ def get_dataset(dataset, fname):
         dump_dataset(dataset, fname)
 
     res = dict()
-    for entry in dataset:
-        res[entry["instance_id"]] = entry
+    if start_range == 0 and end_range == 0:
+        for entry in dataset:
+            res[entry["instance_id"]] = entry
+    else:
+        for entry in dataset[start_range: end_range + 1]:
+            res[entry["instance_id"]] = entry
 
     return res
 

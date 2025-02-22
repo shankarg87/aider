@@ -970,7 +970,8 @@ class Coder:
 
     def move_back_cur_messages(self, message):
         self.done_messages += self.cur_messages
-        self.summarize_start()
+        # TODO: remove this code
+        # self.summarize_start()
 
         # TODO check for impact on image messages
         if message:
@@ -1372,6 +1373,7 @@ class Coder:
                             self.reflected_message = msg
                     else:
                         self.move_back_cur_messages("")
+                        self.cached_tool_output = None
                     return
 
         elif self.partial_response_content:

@@ -13,7 +13,7 @@ CACHE_PATH = "~/.aider.send.cache.v1"
 CACHE = None
 # CACHE = Cache(CACHE_PATH)
 
-RETRY_TIMEOUT = 60
+RETRY_TIMEOUT = 10
 
 
 def send_completion(

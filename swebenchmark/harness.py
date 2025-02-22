@@ -183,7 +183,7 @@ def get_search_coder(model, git_dname, chat_history_file, llm_history_file, even
 
     return coder
 
-def get_edit_coder(from_coder, event_history_file):
+def get_edit_coder(model, git_dname, chat_history_file, llm_history_file, event_history_file, test_cmd, temperature, oracle_files=None, suggest_shell_commands=False, verbose=False):
     """
     Get an instance of aider to work with the given LLM `model` at `temperature`
     on the code in `git_dname`. Will store the markdown chat logs in
@@ -192,27 +192,57 @@ def get_edit_coder(from_coder, event_history_file):
 
     If `oracle_files` are provided, they are added to the aider chat automatically.
     """
+    if oracle_files and git_dname:
+        oracle_files = [Path(git_dname) / fname for fname in oracle_files]
+
+    model = Model(model)
+
+    io = InputOutput(
+        yes=True,  # Say yes to every suggestion aider makes
+        chat_history_file=chat_history_file,  # Log the chat here
+        input_history_file="/dev/null",  # Don't log the "user input"
+        llm_history_file=llm_history_file, # Log the LLM completions here
+    )
+    dump(git_dname)
+
     coder = Coder.create(
         analytics=Analytics(logfile=event_history_file),
-        from_coder=from_coder,
         edit_format="diff",
-        map_tokens=4096,
+        main_model=model,
+        io=io,
+        stream=False,
+        auto_commits=False,  # Don't bother git committing changes
+        fnames=oracle_files,
+        auto_test=False,  # TODO, need to fix this
+        test_cmd=test_cmd,
+        suggest_shell_commands=suggest_shell_commands,
         detect_urls = True,
     )
-    
+    coder.temperature = temperature
+
+    # Take at most 4 steps before giving up.
+    # Usually set to 5, but this reduces API costs.
+    coder.max_reflections = 2
+
     # Add announcement lines to the markdown chat log
     coder.show_announcements()
+
+    # messages = coder.format_messages()
+    # utils.show_messages(messages)
+
     return coder
 
 
-def process_one_instance(entry, num_tries, models, temperature, model_name_or_path, out_dname, out_pred_file, oracle=False, verbose=False):
+def process_one_instance(entry, num_tries, models, temperature, model_name_or_path, out_dname, out_pred_file, use_search_coder, oracle=False, verbose=False):
     """Process one `entry` from SWE Bench using the LLM `models` at the
     given `temperature`.  Set `model_name_or_path` in the result json.
     Store the result json and the chat log into `out_dname`.
     """
 
+    
     instance_id = entry["instance_id"]
     base_commit = entry["base_commit"]
+    instance_results = {instance_id: False}
 
     print("=" * 60)
     dump(instance_id)
@@ -257,25 +287,9 @@ def process_one_instance(entry, num_tries, models, temperature, model_name_or_pa
                 #test_cmd = lambda: run_pre_existing_tests(entry, git_tempdir)  # noqa: E731
                 test_cmd = None
                 # Get an instance of aider
-                search_coder = get_search_coder(
-                    model,
-                    git_tempdir,
-                    chat_history_file,
-                    llm_history_file,
-                    event_history_file,
-                    test_cmd,
-                    temperature,
-                    oracle_files=oracle_files,
-                    suggest_shell_commands=False,
-                    verbose=verbose,
-                )
 
                 dump(instance_id)
                 dump(gold_files)
-
-                # Tell aider to work on the `problem_statement`.
-                # This is the same as if you pasted it into a fresh chat with aider
-                # launched in the repo.
                 orig_message = """Below is a real GitHub issue from a popular GitHub repository.
 The issue was filed some time ago.
 The repo has been checked out at the commit that existed at the moment the issue was filed.
@@ -287,31 +301,53 @@ Propose changes to update the repo to fix the problem below.
 
 #"""
                 orig_message += problem_statement
-                try:
-                    search_coder.run(orig_message)
-                except Exception as coder_err:
-                    # swallow any exceptions during benchmarking
-                    dump(coder_err)
-                    os.chdir(original_cwd)
-                    continue
-                
-                print("Coder run is complete....")
-                # Take note of which files aider added to the chat for stats later
-                added_files = search_coder.get_inchat_relative_files()
+                added_files = []
+                if use_search_coder:
+                    search_coder = get_search_coder(
+                        model,
+                        git_tempdir,
+                        chat_history_file,
+                        llm_history_file,
+                        event_history_file,
+                        test_cmd,
+                        temperature,
+                        oracle_files=oracle_files,
+                        suggest_shell_commands=False,
+                        verbose=verbose,
+                    )
 
-                if not added_files:
-                    print("No added files ....")
-                    message = """You haven't named any files in this repo.
-Remember, this repo is checked out at quite an old commit.
-So the file layout and contents may be unfamiliar.
 
-Tell me: which 3-5 files from this repo should I look at to solve the problem?
-"""
-                    search_coder.run(message)
-                    print("Coder second run complete ....")
+                    # Tell aider to work on the `problem_statement`.
+                    # This is the same as if you pasted it into a fresh chat with aider
+                    # launched in the repo.
+                    try:
+                        search_coder.run(orig_message)
+                    except Exception as coder_err:
+                        # swallow any exceptions during benchmarking
+                        dump(coder_err)
+                        os.chdir(original_cwd)
+                        continue
+                    
+                    print("Coder run is complete....")
+                    # Take note of which files aider added to the chat for stats later
+                    added_files = search_coder.get_inchat_relative_files()
+                    # Keep track of API costs
+                    cost += search_coder.total_cost
+
 
                 print(" Now running edit coder with oracle files {added_files} ....")
-                edit_coder = get_edit_coder(search_coder, event_history_file)
+                edit_coder = get_edit_coder(
+                    model,
+                    git_tempdir,
+                    chat_history_file,
+                    llm_history_file,
+                    event_history_file,
+                    test_cmd,
+                    temperature,
+                    oracle_files=added_files,
+                    suggest_shell_commands=False,
+                    verbose=verbose,
+                )
                 try:
                     edit_coder.run(orig_message)
                 except Exception as coder_err:
@@ -325,7 +361,7 @@ Tell me: which 3-5 files from this repo should I look at to solve the problem?
                 dump(added_files)
 
                 # Keep track of API costs
-                cost += search_coder.total_cost
+                cost += edit_coder.total_cost
 
                 # Get the diff between the current state and the original commit
                 model_patch = diff_versus_commit(git_tempdir, base_commit)
@@ -340,7 +376,7 @@ Tell me: which 3-5 files from this repo should I look at to solve the problem?
                 # For computing stats
                 model=model,
                 temperature=temperature,
-                cost=search_coder.total_cost,
+                cost=cost,
                 added_files=added_files,
                 gold_files=gold_files,
                 edited_files=files_in_patch(model_patch),
@@ -354,7 +390,7 @@ Tell me: which 3-5 files from this repo should I look at to solve the problem?
             dump(result)
 
             # Did we get a successful edit, lint and test? If so, we found a plausible solution!
-            if model_patch and search_coder.lint_outcome: # TODO, need to reincorporate test outcome // and coder.test_outcome:
+            if model_patch and edit_coder.lint_outcome: # TODO, need to reincorporate test outcome // and coder.test_outcome:
                 winner = result
                 break
 
@@ -376,7 +412,9 @@ Tell me: which 3-5 files from this repo should I look at to solve the problem?
 
     dump(winner)
     if not winner:
-        return
+        return instance_results
+
+    instance_results[instance_id] = True
 
     print("\n\nFinal diff:\n")
     print(winner["model_patch"])
@@ -409,6 +447,8 @@ Tell me: which 3-5 files from this repo should I look at to solve the problem?
     with open(out_pred_file, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=4)
 
+    return instance_results
+
 def export_to_gcs(output_folder, gcs_bucket):
     """ Exports data from the output folder to a GCS bucket
         May append to a single csv file with the summary results across all runs
@@ -416,7 +456,7 @@ def export_to_gcs(output_folder, gcs_bucket):
     pass
 
 def process_instances(
-    dataset, model, instance_id, num_tries, threads, temperature, output_folder, run_id, use_oracle, gcs_bucket, verbose=False
+    dataset, model, instance_id, num_tries, threads, temperature, output_folder, run_id, use_oracle, gcs_bucket, use_search_coder, out_pred_file, done_instances=[], verbose=False
 ):
 
     if not CHAT_LOGS_DNAME.exists():
@@ -426,7 +466,6 @@ def process_instances(
     chat_history_dname = CHAT_LOGS_DNAME / run_id
     chat_history_dname.mkdir(exist_ok=True)
 
-    done_instances = []    
     if instance_id:
         remaining_instances = [instance_id]
     else:
@@ -434,7 +473,7 @@ def process_instances(
         remaining_instances = list(dataset.keys())
 
     if threads > 1:
-        process_one_instance_lox = lox.process(threads)(process_one_instance)
+        process_one_instance_lox = lox.thread(threads)(process_one_instance)
         process_one_instance_func = process_one_instance_lox.scatter
         gather = process_one_instance_lox.gather
     else:
@@ -454,7 +493,8 @@ def process_instances(
             out_dname=output_folder,
             oracle=use_oracle,
             verbose=verbose,
-            out_pred_file=f"{output_folder}/{run_id}"
+            out_pred_file=out_pred_file,
+            use_search_coder=use_search_coder,
         )
 
         print("#" * 60)
