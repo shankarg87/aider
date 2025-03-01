@@ -61,3 +61,17 @@ tokenizers==0.19.1
 
 # streamlit 1.39.0 depends on this, as far back as 1.22 which is ancient and doesn't have chat ui
 Pillow<11
+
+tree-sitter==0.21.3
+
+tree-sitter-languages==1.10.2
+
+tree-sitter-python==0.23.6
+
+types-python-dateutil==2.8.19.20240106
+
+types-PyYAML==6.0.12.12
+
+swebench @ git+https://github.com/princeton-nlp/SWE-bench@5f5a7df799663adba4b191eca3d675faf3621fe2
+
+jedi==0.19.1
