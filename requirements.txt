@@ -292,7 +292,7 @@ swebench @ git+https://github.com/princeton-nlp/SWE-bench@5f5a7df799663adba4b191
     # via -r requirements/requirements.in
 tiktoken==0.8.0
     # via litellm
-tokenizers==0.19.1
+tokenizers==0.21.0
     # via
     #   -r requirements/requirements.in
     #   litellm
