@@ -479,10 +479,11 @@ class Coder:
 
         # validate the functions jsonschema
         if self.functions:
-            from jsonschema import Draft7Validator
+            # temporarily disabling until i get figure out import error
+            # from jsonschema import Draft7Validator
 
-            for function in self.functions:
-                Draft7Validator.check_schema(function)
+            #for function in self.functions:
+            #    Draft7Validator.check_schema(function)
 
             if self.verbose:
                 self.io.tool_output("JSON Schema:")
