@@ -60,22 +60,32 @@ class CodeSearchCoder(EditBlockCoder):
         ),
         dict(
             name="read_files",
-            description="Get the contents of multiple files",
+            description="Get the contents of multiple files. Only 10 lines will be displayed from starting line number.",
             parameters=dict(
                 type="object",
                 properties=dict(
                     file_paths=dict(
                         type="array",
                         items=dict(
-                            type="string",
-                            description="File path",
+                            type="object",
+                            properties={
+                                "file_path": dict(
+                                    type="string",
+                                    description="File path",
+                                ),
+                                "start_line_number": dict(
+                                    type="integer",
+                                    description="Optional line number from which to start reading",
+                                ),
+                            },
+                            required=["file_path"],
                         ),
                     ),
                 ),
                 required=["file_paths"],
                 additionalProperties=False,
             ),
-        ),
+        ),                
         dict(
             name="list",
             description="List contents of a directory",
@@ -111,7 +121,7 @@ class CodeSearchCoder(EditBlockCoder):
         ),
         dict(
             name="grep",
-            description="Find all files that contain occurence of a particular text",
+            description="Find all occurences of a particular text. Returns 2 lines of context around the text with the starting line number and filename.",
             parameters=dict(
                 type="object",
                 properties=dict(
@@ -119,12 +129,12 @@ class CodeSearchCoder(EditBlockCoder):
                         type="string",
                         description="text that you need to search for",
                     ),
-                    dir_path=dict(
+                    path=dict(
                         type="string",
-                        description="directory in which you want to search",
+                        description="file/directory in which you want to search recursively for the text",
                     ),
                 ),
-                required=["text, dir_path"],
+                required=["text, path"],
                 additionalProperties=False,
             ),       
         ),        
@@ -166,19 +176,25 @@ class CodeSearchCoder(EditBlockCoder):
         original_definition = resolve_original_definition(definitions, jedi_project)
         return dump_definition(original_definition)
     
+
     def read_files(self, file_paths):
         content = []
-        for file_path in file_paths:
+        for item in file_paths:
+            file_path = item["file_path"]
+            start_line = item.get("start_line_number", 0)
+
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"The file {file_path} does not exist.")
             if not os.path.isfile(file_path):
                 raise IsADirectoryError(f"The path {file_path} is not a file.")
             if not file_path.endswith(('.py', '.txt')):
                 raise ValueError(f"The file {file_path} is not a valid text file.")
-            
+
             with open(file_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+                endline = min(start_line + 10, len(lines))
                 content.append({
-                    "file_content": f.read(),
+                    "file_content": ''.join(lines[start_line: endline]),
                     "file_path": file_path,
                 })
 
@@ -201,33 +217,59 @@ class CodeSearchCoder(EditBlockCoder):
         
         return contents
     
-    def grep(self, text, dir_path):
-        """Recursively search for text in Python files under a directory."""
-        contents = []
-        full_path = os.path.join(os.getcwd(), dir_path)
 
-        if os.path.exists(full_path):
+def grep(self, text, path):
+    """
+    Recursively search for text in Python files under a directory or in a single file
+    and return files and context lines where text was found.
+    """
+    contents = []
+    full_path = os.path.join(os.getcwd(), path)
+
+    if os.path.exists(full_path):
+        if os.path.isfile(full_path):
+            # Handle single file
+            if full_path.endswith(".py"):
+                try:
+                    with open(full_path, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                    for i, line in enumerate(lines):
+                        if text in line:
+                            start = max(i - 2, 0)
+                            end = min(i + 3, len(lines))
+                            context = '\n'.join(lines[start:end])
+                            contents.append({
+                                "filepath": full_path,
+                                "line_number": start,
+                                "content": context,
+                            })
+                except UnicodeDecodeError:
+                    pass
+        elif os.path.isdir(full_path):
+            # Handle directory (existing logic)
             for root, dirs, files in os.walk(full_path):
                 for file in files:
                     if file.endswith(".py"):
                         file_path = os.path.join(root, file)
                         try:
                             with open(file_path, "r", encoding="utf-8") as f:
-                                i = 0
-                                for line in f:
-                                    if text in line:
-                                        contents.append({
-                                            "filepath": file_path,
-                                            "line_number": i,
-                                            "content": line,
-                                        })
-                                    i += 1
+                                lines = f.readlines()
+                            for i, line in enumerate(lines):
+                                if text in line:
+                                    start = max(i - 2, 0)
+                                    end = min(i + 3, len(lines))
+                                    context = '\n'.join(lines[start:end])
+                                    contents.append({
+                                        "filepath": file_path,
+                                        "line_number": start,
+                                        "content": context,
+                                    })
                         except UnicodeDecodeError:
                             continue
-        else:
-            raise FileNotFoundError(f"The directory {full_path} does not exist.")
+    else:
+        raise FileNotFoundError(f"The path {full_path} does not exist.")
 
-        return contents
+    return contents    
 
     def preedit_tool_call(self, args, valid_tool_call = True) -> Tuple[bool, dict]:
         # Tl;DR: Process the codesearch request

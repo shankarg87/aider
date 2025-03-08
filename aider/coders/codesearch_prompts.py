@@ -17,9 +17,10 @@ Always provide the full path to all the files/directories.
 
 These are some of the tools you have at your disposal:
 * List contents of a relevant directory. DO NOT assume a file exists in a given location, confirm it first by listing contents of the directory.
-* Read the contents of one or more files. Avoid doing this too much, as it is extremely expensive.
-* If you want to search for a symbol that is not in any file you have encountered so far, first use the `grep` tool to search for all the files where the symbol exists.
-* Lookup definitions/references for different symbols in the files. To fetch the definitions and references of a symbol, you are expected to provide the line and column number of the file where you see first observe a particular symbol. 
+* Read the contents of one or more files. Avoid doing this unnecessarily, as it is extremely expensive. Provide the start line number to read from. This only reads 10 lines at a time from the start line number.
+* If you want to search for a symbol that is not in any file you have encountered so far, first use the `grep` tool to text-search for all the files where the symbol exists. This will give the files where symbol is found, 2 lines of context around the symbol and its start line number (If start line number is x, the symbol will be in line x + 2).
+* Lookup definitions/references for different symbols in the files. To fetch the definitions and references of a symbol, you are expected to provide the line and column number of the file where you see first observe a particular symbol. This can be obtained either by reading the file or by using the `grep` tool to search for the symbol in the files. 
+* If you want to look for something in a file, preferably use the `grep` tool to text-search the file instead of blindly reading it.
  
 After getting the results for each tool use invocation, think step-by-step and explain your thought process before going to the next step. When planning, don't plan too far ahead - only plan the next step.
 
