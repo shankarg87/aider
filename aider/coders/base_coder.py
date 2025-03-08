@@ -1235,6 +1235,64 @@ class Coder:
         self.cache_warming_thread.start()
 
         return chunks
+    
+    def detect_and_invoke_tool(self):
+        """
+        Detect if self.partial_response_content contains JSON referencing the codesearch_coder tools. 
+        If so, parse arguments and call self.preedit_tool_call().
+        return whether to interrupt processing
+        """
+        interrupt_processing = False
+        if not self.partial_response_content:
+            return False
+        
+        if not hasattr(self, "preedit_tool_call"):
+            return False
+
+        content_str = self.partial_response_content.strip().splitlines()[-1] if self.partial_response_content else ""
+        # Basic check for JSON
+        if not (content_str.startswith("{") or content_str.startswith("[")):
+            return False
+
+        try:
+            data = json.loads(content_str)
+        except json.JSONDecodeError:
+            return False
+
+        # Expected format: {"name": "function_name", "arguments": {...}}
+        name = data.get("name")
+        args = data.get("arguments", {})
+
+        if not name:
+            return False
+
+        # Prepare partial_response_function_call
+        self.partial_response_function_call = {"name": name}
+
+        try:
+            self.event("predit interpretted tool call, name: {}, args: {}".format(name, args))
+            valid, output = self.preedit_tool_call(args, False)
+            if valid:
+                interrupt_processing = True
+                self.event("predit interpretted tool results, output: {}".format(output))
+                self.update_cur_messages()
+                if output.get("content"):
+                    # Handle successful tool call
+                    reflected_message = "\n\nTool call results are attached below." + "\n\n" + str(output)
+                    if self.reflected_message:
+                        self.reflected_message += reflected_message
+                    else:
+                        self.reflected_message = reflected_message
+                else:
+                    # If no content returned, complete message processsing
+                    self.move_back_cur_messages("")
+
+        except Exception as e:
+            self.io.tool_warning(str(e))
+            self.io.tool_error("The tool call failed with the following error: " + str(e))
+
+        return interrupt_processing
+ 
 
     def send_message(self, inp):
         self.event("message_send_starting")
@@ -1356,12 +1414,14 @@ class Coder:
                 self.event("predit tool call name: {}, args: {}".
                            format(self.partial_response_function_call.get("name"), args))
                 try:
-                    valid, self.cached_tool_output = self.preedit_tool_call(args)
+                    valid, self.cached_tool_output = self.preedit_tool_call(args, True)
                     msg = "The tool use results are attached below."
                 except Exception as e:
                     valid = True
                     self.io.tool_warning(str(e))
                     msg = "The tool use failed with the following error: " + str(e)
+                    self.event("predit tool call exception: {}, exception: {}".
+                           format(self.partial_response_function_call.get("name"), str(e)))
 
                 if valid:
                     self.update_cur_messages()
@@ -1381,6 +1441,9 @@ class Coder:
             content = self.partial_response_content
         else:
             content = ""
+
+        if self.detect_and_invoke_tool():
+            return
 
         if not interrupted:
             add_rel_files_message = self.check_for_file_mentions(content)

@@ -229,11 +229,11 @@ class CodeSearchCoder(EditBlockCoder):
 
         return contents
 
-    def preedit_tool_call(self, args) -> Tuple[bool, dict]:
+    def preedit_tool_call(self, args, valid_tool_call = True) -> Tuple[bool, dict]:
         # Tl;DR: Process the codesearch request
         name = self.partial_response_function_call.get("name")
         content = ""
-        cached_tool_output = {}
+        tool_output = {}
         valid_call = True
 
         # TODO(shankgan): Raise appropriate exceptions here to inform assistant of bad function calls
@@ -255,8 +255,11 @@ class CodeSearchCoder(EditBlockCoder):
             valid_call = False
 
         if valid_call:
-            cached_tool_output = {"tool_call_id": self.partial_response_tool_calls[0]["id"], "content": content}
-        return valid_call, cached_tool_output
+            if valid_tool_call:
+                tool_output = {"tool_call_id": self.partial_response_tool_calls[0]["id"], "content": content}
+            else:
+                tool_output = {"function_name": name, "content": content}
+        return valid_call, tool_output
 
 def resolve_original_definition(definitions, project, visited=None):
     """
