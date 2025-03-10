@@ -188,10 +188,10 @@ class Analytics:
         if not model:
             return None
 
-        info = model_info_manager.get_model_from_cached_json_db(model.name)
-        if info:
-            return model.name
-        elif "/" in model.name:
+        #info = model_info_manager.get_model_from_cached_json_db(model.name)
+        #if info:
+        #    return model.name
+        if "/" in model.name:
             return model.name.split("/")[0] + "/REDACTED"
         return None
 

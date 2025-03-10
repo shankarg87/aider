@@ -858,8 +858,8 @@ class ModelInfoManager:
                 pass
 
     def get_model_from_cached_json_db(self, model):
-        if not self.content:
-            self._update_cache()
+        #if not self.content:
+        #    self._update_cache()
 
         if not self.content:
             return dict()
